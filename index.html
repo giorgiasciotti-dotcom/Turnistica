@@ -59,7 +59,34 @@ function nthDow(d){return Math.ceil(d/7)} function tab(id){document.querySelecto
 function mark(b){const vals=["","X","XG","XN","XGN","XM","XP","XPN","FE","AA"];let cur=b.querySelector('small').textContent; if(cur==='—')cur=''; let n=(vals.indexOf(cur)+1)%vals.length,v=vals[n];b.querySelector('small').textContent=v||'—';let db=getDB();db[key()]=db[key()]||{};db[key()][b.dataset.doc]=db[key()][b.dataset.doc]||{};if(v)db[key()][b.dataset.doc][b.dataset.day]=v;else delete db[key()][b.dataset.doc][b.dataset.day];saveDB(db)}
 function renderAvailability(){let db=getDB()[key()]||{};document.querySelectorAll('.day').forEach(b=>{let v=db?.[b.dataset.doc]?.[b.dataset.day]||'';b.querySelector('small').textContent=v||'—'})}
 function backupData(){let blob=new Blob([JSON.stringify({app:"Turnistica",version:9,exported:new Date().toISOString(),data:getDB()},null,2)],{type:"application/json"}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=`Turnistica_backup_${key()}.json`;a.click();URL.revokeObjectURL(a.href)}
-function restoreData(ev){let f=ev.target.files[0];if(!f)return;let r=new FileReader();r.onload=()=>{try{let x=JSON.parse(r.result),data=x.data||x;if(confirm("Ripristinare il backup? I dati locali attuali saranno sostituiti.")){saveDB(data);renderAvailability();renderSchedule();alert("Backup ripristinato")}}catch(e){alert("Backup non valido")}};r.readAsText(f);ev.target.value=''}
+function restoreData(ev){
+  const f=ev.target.files&&ev.target.files[0]; if(!f)return;
+  const r=new FileReader();
+  r.onload=()=>{
+    try{
+      let raw=String(r.result||"").replace(/^\uFEFF/,"").trim();
+      let x=JSON.parse(raw);
+      // Compatibilita con backup storici Turnistica (v4+) e con JSON eventualmente serializzato due volte.
+      if(typeof x==="string") x=JSON.parse(x);
+      let data=(x&&typeof x==="object"&&x.data&&typeof x.data==="object")?x.data:x;
+      if(!data||typeof data!=="object"||Array.isArray(data)) throw new Error("struttura non valida");
+      // Backup mensile diretto: lo incapsula automaticamente nel mese visualizzato.
+      const hasMonthKey=Object.keys(data).some(k=>/^\d{4}-\d{2}$/.test(k));
+      const looksLikeMonth=DOCS.some(p=>data[p]&&typeof data[p]==="object");
+      if(!hasMonthKey&&looksLikeMonth) data={[key()]:data};
+      const months=Object.keys(data).filter(k=>/^\d{4}-\d{2}$/.test(k));
+      if(!months.length) throw new Error("nessun mese trovato");
+      if(!confirm(`Importare il backup (${x.version?"v"+x.version:"formato storico"})? I dati locali attuali saranno sostituiti.`)) return;
+      saveDB(data);
+      // Il salvataggio e' gia' concluso: eventuali problemi di visualizzazione non annullano l'importazione.
+      try{renderAvailability();renderSchedule();}catch(uiErr){console.error(uiErr)}
+      alert(`Backup importato correttamente. Mesi trovati: ${months.join(", ")}`);
+    }catch(e){console.error(e);alert("Backup non valido o non riconosciuto. Seleziona il file JSON Turnistica_backup_....json")}
+    finally{ev.target.value=""}
+  };
+  r.onerror=()=>{alert("Impossibile leggere il file selezionato");ev.target.value=""};
+  r.readAsText(f);
+}
 function availability(p,d){return getDB()[key()]?.[p]?.[d]||""}
 function unavailable(p,d,kind){let v=availability(p,d);if(!v)return false;if(["X","FE","AA"].includes(v))return true;if(kind==="D")return ["XG","XM","XP"].includes(v);if(kind==="N")return ["XN","XGN","XPN"].includes(v);return ["XG","XM","XP","XN","XGN","XPN"].includes(v)}
 function dayBusy(p,d,guards,services){return (guards[d]?.D||[]).includes(p)||(guards[d]?.N||[]).includes(p)||services.some(x=>x.day===d&&x.doctor===p)}
