@@ -18,7 +18,7 @@ button,select,input{font:inherit}button{border:0;border-radius:9px;padding:10px;
 </style></head><body>
 <header><h1>Turnistica</h1><div class="sub">Master • indisponibilità • generazione • audit</div></header><main>
 <div class="card"><div class="toolbar">
-<label>Anno <input id="year" type="number" value="2026" style="width:90px"></label>
+<label>Anno <input id="year" type="number" value="2026" style="width:90px"></label><input id="month" type="hidden" value="10">
 <label>Codice <select id="code"><option>X</option><option>XM</option><option>XP</option><option>XN</option><option>XG</option><option>XPN</option><option>XGN</option><option>FE</option><option>AA</option><option value="">LIBERO</option></select></label>
 </div><div class="toolbar" style="margin-top:8px">
 <button style="background:#087443" onclick="backupData()">Esporta backup</button>
@@ -53,7 +53,8 @@ const POOLS={
 const HARD={Pucci:{noGuard:true},Campana:{maxN:2,noN:[3,4]},Cantonetti:{maxN:2},Sciotti:{noN:[1],noD:[2]},Carusotti:{noN:[2],noD:[3]},Venezia:{noN:[0]},Zannini:{noN:[3]},Bellantone:{noN:[3]},Romeo:{noN:[4]},Schippa:{noD:[1]}};
 const KEY="turnistica_webapp";
 function getDB(){try{return JSON.parse(localStorage.getItem(KEY)||"{}")||{}}catch(e){return{}}} function saveDB(x){localStorage.setItem(KEY,JSON.stringify(x))}
-function key(){return `${document.getElementById("year").value}-${document.getElementById("month").value}`}
+function key(){const y=document.getElementById("year").value;const m=String(document.getElementById("month").value).padStart(2,"0");return `${y}-${m}`}
+function setMonth(m){document.getElementById("month").value=String(m);document.querySelectorAll("#months button").forEach(b=>b.classList.toggle("active",Number(b.dataset.m)===Number(m)));renderAvailability();renderSchedule()}
 function ndays(){let [y,m]=key().split("-").map(Number);return new Date(y,m,0).getDate()} function dow(d){let [y,m]=key().split("-").map(Number);return new Date(y,m-1,d).getDay()}
 function nthDow(d){return Math.ceil(d/7)} function tab(id){document.querySelectorAll('.panel').forEach(x=>x.classList.remove('active'));document.getElementById(id).classList.add('active')}
 function mark(b){const vals=["","X","XG","XN","XGN","XM","XP","XPN","FE","AA"];let cur=b.querySelector('small').textContent; if(cur==='—')cur=''; let n=(vals.indexOf(cur)+1)%vals.length,v=vals[n];b.querySelector('small').textContent=v||'—';let db=getDB();db[key()]=db[key()]||{};db[key()][b.dataset.doc]=db[key()][b.dataset.doc]||{};if(v)db[key()][b.dataset.doc][b.dataset.day]=v;else delete db[key()][b.dataset.doc][b.dataset.day];saveDB(db)}
@@ -78,9 +79,16 @@ function restoreData(ev){
       if(!months.length) throw new Error("nessun mese trovato");
       if(!confirm(`Importare il backup (${x.version?"v"+x.version:"formato storico"})? I dati locali attuali saranno sostituiti.`)) return;
       saveDB(data);
-      // Il salvataggio e' gia' concluso: eventuali problemi di visualizzazione non annullano l'importazione.
-      try{renderAvailability();renderSchedule();}catch(uiErr){console.error(uiErr)}
-      alert(`Backup importato correttamente. Mesi trovati: ${months.join(", ")}`);
+      const check=getDB();
+      if(!check || !check[months[0]] || typeof check[months[0]]!=="object") throw new Error("verifica salvataggio fallita");
+      if(months.includes(key())){
+        const expected=data[key()]||{};
+        const actual=check[key()]||{};
+        const sampleDoc=DOCS.find(p=>expected[p]&&Object.keys(expected[p]).length);
+        if(sampleDoc){const sampleDay=Object.keys(expected[sampleDoc])[0];if(actual?.[sampleDoc]?.[sampleDay]!==expected[sampleDoc][sampleDay]) throw new Error("verifica dati importati fallita");}
+      }
+      renderAvailability();renderSchedule();
+      alert(`Backup importato e verificato correttamente. Mesi trovati: ${months.join(", ")}`);
     }catch(e){console.error(e);alert("Backup non valido o non riconosciuto. Seleziona il file JSON Turnistica_backup_....json")}
     finally{ev.target.value=""}
   };
