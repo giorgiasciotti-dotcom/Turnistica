@@ -17,7 +17,7 @@ button,select,input{font:inherit}button{border:0;border-radius:9px;padding:10px;
 .rule{font-size:13px;padding:7px 0;border-bottom:1px solid #eee}table{border-collapse:collapse;width:100%;font-size:12px}th,td{border:1px solid #e4e7ec;padding:6px;text-align:center;white-space:nowrap}th{background:#f9fafb}
 @media(min-width:700px){.months{grid-template-columns:repeat(6,1fr)}}
 </style></head><body>
-<header><h1>Turnistica</h1><div class="sub">Master • indisponibilità • generazione • audit • V15.1</div></header><main>
+<header><h1>Turnistica</h1><div class="sub">Master • indisponibilità • generazione • audit • V15.3 mobile</div></header><main>
 <div class="card"><div class="toolbar">
 <label>Anno <input id="year" type="number" value="2026" style="width:90px"></label><input id="month" type="hidden" value="10">
 <label>Codice <select id="code"><option>X</option><option>XM</option><option>XP</option><option>XN</option><option>XG</option><option>XPN</option><option>XGN</option><option>FE</option><option>AA</option><option value="">LIBERO</option></select></label>
@@ -115,59 +115,44 @@ function guardScore(p,d,s,cnt,services){
  return z
 }
 async function generateGuards(services=[], progressCb=null){
- // V15: ricerca con backtracking, weekend prima dei feriali. Una scelta che rende impossibile un turno successivo viene annullata.
+ // V15.3 MOBILE: generatore deterministico a fasi, senza DFS ricorsivo.
+ // Evita il blocco di Safari/iPhone: nessuna ricerca da centinaia di migliaia di nodi.
  let sch={},cnt={};DOCS.forEach(p=>cnt[p]={D:0,N:0});
- for(let d=1;d<=ndays();d++)sch[d]={D:[],N:[]};
- let slots=[];
- // V15: prima si chiudono i weekend come blocchi, poi le notti feriali e infine le diurne feriali.
- // Questo evita che i turni feriali consumino i medici necessari al weekend.
- for(let d=1;d<=ndays();d++){let w=dow(d);if(w===5||w===6||w===0)slots.push({d,s:'N'},{d,s:'N'},{d,s:'D'},{d,s:'D'})}
- for(let d=1;d<=ndays();d++){let w=dow(d);if(w>=1&&w<=4)slots.push({d,s:'N'},{d,s:'N'})}
- for(let d=1;d<=ndays();d++){let w=dow(d);if(w>=1&&w<=4)slots.push({d,s:'D'},{d,s:'D'})}
- let nodes=0,MAXNODES=180000;
- function candidates(i){let {d,s}=slots[i];let c=DOCS.filter(p=>canGuard(p,d,s,sch,cnt,services));c.sort((a,b)=>guardScore(a,d,s,cnt,services)-guardScore(b,d,s,cnt,services));return c}
- async function dfs(i){
-   if(i>=slots.length)return true;
-   if(++nodes>MAXNODES)return false;
-   // V15.2 mobile: cede periodicamente il controllo a Safari, evitando il blocco dell’interfaccia.
-   if(nodes%350===0){if(progressCb)progressCb(nodes,MAXNODES);await new Promise(r=>setTimeout(r,0));}
-   let {d,s}=slots[i],c=candidates(i);
-   // prova prima i candidati migliori, ma con una piccola rotazione tra tentativi
-   for(const p of c){
-     sch[d][s].push(p);cnt[p][s]++;
-     // look-ahead immediato: se il prossimo slot non ha candidati, torna indietro subito
-     let ok=(i+1>=slots.length)||candidates(i+1).length>0;
-     if(ok&&await dfs(i+1))return true;
-     cnt[p][s]--;sch[d][s].pop();
-   }
-   return false;
- }
- await dfs(0);
- // Fallback V15 per sole guardie DIURNE feriali (lun-ven): se una delle due guardie da 12h resta scoperta,
- // può essere coperta da due medici da 6h (AM + PM). Notti, sabato e domenica non vengono mai frazionati.
- // I frazionamenti sono registrati in sch[d].Dsplit e non sostituiscono mai una copertura intera disponibile.
+ for(let d=1;d<=ndays();d++)sch[d]={D:[],N:[],Dsplit:[]};
+ const placeSlot=(d,s)=>{
+   let c=DOCS.filter(p=>canGuard(p,d,s,sch,cnt,services));
+   c.sort((a,b)=>guardScore(a,d,s,cnt,services)-guardScore(b,d,s,cnt,services));
+   if(!c.length)return false;
+   const p=c[0];sch[d][s].push(p);cnt[p][s]++;return true;
+ };
+ // 1) Weekend per primi: ven N, sab G/N, dom G/N. Mai frazionati.
+ let weekend=[];
+ for(let d=1;d<=ndays();d++){let w=dow(d);if(w===5)weekend.push({d,s:'N'},{d,s:'N'});if(w===6||w===0)weekend.push({d,s:'D'},{d,s:'D'},{d,s:'N'},{d,s:'N'});}
+ for(let i=0;i<weekend.length;i++){placeSlot(weekend[i].d,weekend[i].s);if(i%8===7){if(progressCb)progressCb(i+1,weekend.length);await new Promise(r=>setTimeout(r,0));}}
+ // 2) Notti feriali: intere e mai frazionate.
+ let nights=[];for(let d=1;d<=ndays();d++){let w=dow(d);if(w>=1&&w<=5)nights.push({d,s:'N'},{d,s:'N'});}
+ for(let i=0;i<nights.length;i++){while((sch[nights[i].d].N||[]).length<2&&!placeSlot(nights[i].d,'N'))break;if(i%10===9)await new Promise(r=>setTimeout(r,0));}
+ // 3) Guardie diurne feriali intere quando possibile.
+ for(let d=1;d<=ndays();d++){let w=dow(d);if(w<1||w>5)continue;while(sch[d].D.length<2){if(!placeSlot(d,'D'))break;}if(d%5===0)await new Promise(r=>setTimeout(r,0));}
+ // 4) Solo se necessario: una G diurna lun-ven può essere divisa AM+PM tra due medici.
  for(let d=1;d<=ndays();d++){
-   let w=dow(d);sch[d].Dsplit=sch[d].Dsplit||[];
-   if(w<1||w>5)continue;
-   while((sch[d].D||[]).length+sch[d].Dsplit.length<2){
+   let w=dow(d);if(w<1||w>5)continue;
+   while(sch[d].D.length+sch[d].Dsplit.length<2){
      const used=new Set([...(sch[d].D||[]),...(sch[d].N||[]),...sch[d].Dsplit.flatMap(x=>x.docs)]);
      const okHalf=(p,half)=>{
        if(used.has(p)||(HARD[p]||{}).noGuard||hadNight(p,d,sch))return false;
        if((HARD[p]||{}).noD?.includes(w))return false;
        let v=availability(p,d);if(['X','FE','AA','XG','XGN'].includes(v))return false;
-       if(half==='AM'&&['XM'].includes(v))return false;
-       if(half==='PM'&&['XP'].includes(v))return false;
+       if(half==='AM'&&v==='XM')return false;if(half==='PM'&&v==='XP')return false;
        if(services.some(x=>x.doctor===p&&x.day===d&&(x.period===half||x.period==='DAY')))return false;
        return true;
      };
-     let am=DOCS.filter(p=>okHalf(p,'AM')).sort((a,b)=>cnt[a].D-cnt[b].D)[0];
-     if(!am)break;used.add(am);
-     let pm=DOCS.filter(p=>okHalf(p,'PM')&&p!==am).sort((a,b)=>cnt[a].D-cnt[b].D)[0];
-     if(!pm)break;
+     let am=DOCS.filter(p=>okHalf(p,'AM')).sort((a,b)=>cnt[a].D-cnt[b].D)[0];if(!am)break;used.add(am);
+     let pm=DOCS.filter(p=>okHalf(p,'PM')&&p!==am).sort((a,b)=>cnt[a].D-cnt[b].D)[0];if(!pm)break;
      sch[d].Dsplit.push({docs:[am,pm],parts:['AM','PM']});cnt[am].D+=.5;cnt[pm].D+=.5;
    }
  }
- return sch
+ return sch;
 }
 function templates(){let a=[];const add=(day,code,label,period,hours,pool,priority)=>a.push({day,code,label,period,hours,pool,priority:priority||pool});for(let d=1;d<=ndays();d++){let w=dow(d),n=nthDow(d);if(w>=1&&w<=6)add(d,'REP','Reparto','AM',6.5,DOCS);if(w===2||w===4)add(d,'SALA','Sala operatoria','DAY',12,DOCS);if(w===1||w===2)add(d,'GINE','Ginecologia','AM',6.333,POOLS.GINE);if(w===1||w===4||(w===5&&n===2))add(d,'PATO','Patologia ostetrica',w===5?'PM':'AM',6.333,POOLS.PATO);if(w===1||w===3)add(d,'GRAV','Gravidanza fisiologica','AM',6.333,POOLS.GRAV);if(w===1)add(d,'ECO','Eco/DP','PM',6.333,POOLS.ECO);if(w===2)add(d,'ECO','Eco/DP','AM',6.333,POOLS.ECO);if(w===3){add(d,'ECO','Eco/DP','AM',6.333,POOLS.ECO);add(d,'ECO','Eco/DP','PM',6.333,POOLS.ECO)}if(w===5)add(d,'ECO','Eco/DP','AM',6.333,POOLS.ECO);if(w===2&&[1,3].includes(n))add(d,'ENDO','Endometriosi','PM',6.333,POOLS.ENDO,POOLS.ENDO);if(w===6)add(d,'ECOTV','Eco TV','AM',6.333,POOLS.ECOTV);if(w===5&&n!==2)add(d,'MENO','Menopausa/adolescenza','PM',6.333,POOLS.MENO);if(w===1||w===5)add(d,'DH','Day Hospital','AM',6.333,POOLS.DH);if(w===4)add(d,'ISTERO','Isteroscopia','AM',6.333,POOLS.ISTERO);if(w===2&&[2,4].includes(n))add(d,'COLPO','Colposcopia','PM',6.333,POOLS.COLPO,POOLS.COLPO);if(w===5)add(d,'URO','Uroginecologia','AM',6.333,POOLS.URO)}
 // IVG: pool CHIUSO. Solo questi sei nomi possono ricevere IVG.
@@ -220,15 +205,15 @@ async function generateAll(){
  const btn=document.getElementById('generateBtn'),status=document.getElementById('genStatus');
  if(btn.disabled)return;
  btn.disabled=true; btn.textContent='Generazione…';
- let best=null,bestQ=Infinity; const TRIALS=10;
+ let best=null,bestQ=Infinity; const TRIALS=6;
  try{
-   if(status)status.textContent=' Avvio generazione…';
+   if(status)status.textContent=' Fase 1/4 · preparazione attività…';
    // forza Safari a disegnare subito lo stato del pulsante prima del calcolo
    await new Promise(r=>setTimeout(r,30));
    for(let trial=0;trial<TRIALS;trial++){
      let empty={};for(let d=1;d<=ndays();d++)empty[d]={D:[],N:[]};
      let services=generateServices(empty);
-     if(status)status.textContent=` Tentativo ${trial+1}/${TRIALS} · costruzione guardie…`;
+     if(status)status.textContent=` Tentativo ${trial+1}/${TRIALS} · weekend e guardie…`;
      let guards=await generateGuards(services,(nodes,max)=>{if(status)status.textContent=` Tentativo ${trial+1}/${TRIALS} · ricerca ${Math.round(nodes/max*100)}%`;});
      let q=candidatePenalty(guards,services);
      if(q<bestQ){bestQ=q;best={guards,services};}
@@ -238,7 +223,7 @@ async function generateAll(){
      await new Promise(r=>setTimeout(r,1));
    }
    if(!best)throw new Error('Nessun candidato generato');
-   let db=getDB();db.__generated=db.__generated||{};db.__generated[key()]={...best,engine:'v15.2-mobile-yield',penalty:bestQ};saveDB(db);
+   let db=getDB();db.__generated=db.__generated||{};db.__generated[key()]={...best,engine:'v15.3-mobile-phased',penalty:bestQ};saveDB(db);
    renderSchedule();
    if(status)status.textContent=` Completato · penalità ${bestQ}`;
    btn.disabled=false; btn.textContent='Genera di nuovo';
